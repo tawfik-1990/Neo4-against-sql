@@ -1,0 +1,387 @@
+
+
+
+library(RMariaDB)
+library(tictoc)
+library(igraph)
+library(ff)
+library(rlist)
+
+
+
+
+
+con <- dbConnect(drv = RMariaDB::MariaDB(), username = "extern",password = "extern123", host="node.wavesbi.com", port = 3306)
+
+SQL45<-dbSendQuery(con, paste("select count(*) from wavesBI.type_4 where sender  "))
+
+Transactions_outdegree_SQL45 <- dbFetch(SQL45)
+
+
+
+
+install.packages("RMariaDB")
+# con <- dbConnect(drv = RMariaDB::MariaDB(), username = "extern",password = "extern123", host="node.wavesbi.com", port = 3306)
+#
+# SQL45<-dbSendQuery(con, paste("select  min(timestamp) from wavesBI.type_4 where assetId is null "))
+#
+# Transactions_outdegree_SQL45 <- dbFetch(SQL45)
+# library(anytime)
+# time<-anytime(1574694364532/1000)
+
+#get all transactions for the most  10 adresse based on  weighted outdegree using sql
+
+
+con <- dbConnect(drv = RMariaDB::MariaDB(), username = "extern",password = "extern123", host="node.wavesbi.com", port = 3306)
+
+tic()
+#SQL<-dbSendQuery(con, paste(" select  order1_senderPublicKey as sender , order1_assetPair_amountAsset as amountAsset, order1_assetPair_priceAsset as priceAsset, order1_amount as  amount, order1_timestamp as time1, order2_senderPublicKey as recipient, order2_amount as amount2, order2_timestamp as time2  from wavesBI.type_7  limit 1000"))
+SQL<-dbSendQuery(con, paste(" select MIN(timestamp) from wavesBI.type_4 where assetId is null  "))
+Transactions_outdegree_SQL <- dbFetch(SQL)
+# SQL<-dbSendQuery(con, paste(" select sender as  sender ,recipient as recipient, amount as amount from wavesBI.type_4",
+#                             "where sender in  (SELECT   Sender  FROM ( (select SUM(amount) AS sumamount, sender  Sender FROM wavesBI.type_4",
+#                             "where assetId is null GROUP BY  sender  order by  sumamount desc  limit 10 )  sum) ) "))
+#
+# Transactions_outdegree_SQL <- dbFetch(SQL)
+
+#extract sender
+sender<-  as.data.frame(unique(Transactions_outdegree_SQL[["sender"]]))
+x <- c("sender")
+colnames(sender) <- x
+
+
+#extract recipient
+recipient<-  as.data.frame(unique(Transactions_outdegree_SQL[["recipient"]]))
+x1 <- c("recipient")
+colnames(recipient) <- x1
+
+
+#export as csv file
+
+write.csv(sender,  "sender.csv", row.names=FALSE, col.names = TRUE,quote=F)
+write.csv(recipient,  "recipient.csv", row.names=FALSE, col.names = TRUE,quote=F )
+write.csv(Transactions_outdegree_SQL,  "edges.csv", row.names=FALSE, col.names = TRUE, sep=",",quote=F)
+
+
+
+
+#get the most addresses dealing with addresses that have the most volume and number of exchanges
+
+library(reticulate)
+
+
+use_python("C:\Users\PC\AppData\Local\Programs\Python\Python37")
+
+is_python_available <- py_available()
+#paste("Is Python Available?", is_python_available)
+
+
+uri = "bolt://localhost:7687"
+
+neo4j <-import("neo4j", convert = FALSE)
+token <- neo4j$basic_auth("neo4j","tawfik")
+driver <- neo4j$GraphDatabase$driver(uri, auth=token)
+the_session <- driver$session()
+tx <- the_session$begin_transaction()
+
+record <- tx$run("MATCH (p1:Sender)-[w:senden]->(r:Recipient) with  r.num as p, COLLECT(r.num) AS bbs ,SUM(toInteger(w.weight)) as sum   ORDER BY sum DESC limit 10 MATCH (s:Sender)-[w:senden]->(r1:Recipient) where r1.num IN bbs return s.num as from, r1.num as recipient , w.weight as amount")
+record_data <- record$data()
+dat<-py_to_r(record_data)
+ed <- data.frame(matrix(unlist(dat), ncol = max(lengths(dat)), byrow = TRUE))
+
+
+r<-as.data.frame(ed)
+
+
+
+#gc()
+edges<-r[,c(1,2,3)]
+colnames(edges)[colnames(edges)=="X1"] <- "from"
+colnames(edges)[colnames(edges)=="X2"] <- "to"
+colnames(edges)[colnames(edges)=="X3"] <- "weight"
+head(edges)
+
+
+ede<-as.data.frame.ffdf(edges)
+rm(edges)
+
+
+ig <- graph_from_data_frame(ede, directed=TRUE)
+
+write_graph(ig, "Transactions_outdegree_Neo11.graphml", format ="graphml")
+
+
+
+
+
+#get all transactions for the most  10 adresse based on  outdegree using sql
+
+
+con <- dbConnect(drv = RMariaDB::MariaDB(), username = "extern",password = "extern123", host="node.wavesbi.com", port = 3306)
+
+tic()
+#SQL<-dbSendQuery(con, paste(" select sender as  sender ,recipient as recipient, amount as amount from wavesBI.type_4",
+                           # "where sender in  (SELECT   Sender  FROM ( (select COUNT(*) AS count, sender  Sender FROM wavesBI.type_4",
+                            #"where assetId is null  GROUP BY  sender  order by  count desc  limit 10 )  sum) ) "))
+
+SQL<-dbSendQuery(con, paste("select COUNT(*) AS count, sender  Sender FROM wavesBI.type_4 where recipient='3P6wdKoCyiVtPxkd4aZKH1cmocdWdFK9wAz'  GROUP BY  sender  order by  count desc  limit 1"))
+
+Transactions_outdegree_SQL <- dbFetch(SQL)
+
+#extract sender
+sender<-  as.data.frame(unique(Transactions_outdegree_SQL[["sender"]]))
+x <- c("sender")
+colnames(sender) <- x
+
+
+#extract recipient
+recipient<-  as.data.frame(unique(Transactions_outdegree_SQL[["recipient"]]))
+x1 <- c("recipient")
+colnames(recipient) <- x1
+
+
+#export as csv file
+
+write.csv(sender,  "sender.csv", row.names=FALSE, col.names = TRUE,quote=F)
+write.csv(recipient,  "recipient.csv", row.names=FALSE, col.names = TRUE,quote=F )
+write.csv(Transactions_outdegree_SQL,  "edges.csv", row.names=FALSE, col.names = TRUE, sep=",",quote=F)
+
+
+
+
+
+t2 <- mean_distance(ig)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+toc()
+
+colnames(Transactions_outdegree_SQL)[colnames(Transactions_outdegree_SQL)=="sender"] <- "from"
+colnames(Transactions_outdegree_SQL)[colnames(Transactions_outdegree_SQL)=="recipient"] <- "to"
+colnames(Transactions_outdegree_SQL)[colnames(Transactions_outdegree_SQL)=="amount"] <- "weight"
+print(Transactions_outdegree_SQL$from)
+head(Transactions_outdegree_SQL)
+
+
+ede<-as.data.frame(Transactions_outdegree_SQL)
+
+
+
+
+
+#create graph
+ig <- graph_from_data_frame(ede, directed=TRUE)
+
+#export graph
+write_graph(ig, "Transactions_outdegree_SQL11.graphml", format ="graphml")
+
+write.csv(Transactions_outdegree_SQL,  "Transactions_outdegree.csv", row.names = FALSE, na="", sep=",",quote=F, append=T)
+
+
+
+
+
+
+
+
+#get all transactions for the most  10 adresse based on  outdegree using sql
+
+con <- dbConnect(drv = RMariaDB::MariaDB(), username = "extern",password = "extern123", host="node.wavesbi.com", port = 3306)
+
+tic()
+SQL<-dbSendQuery(con, paste(" select sender as  sender ,recipient as recipient, amount as amount from wavesBI.type_4",
+                            "where sender in  (SELECT   Sender  FROM ( (select COUNT(*) AS count, sender  Sender FROM wavesBI.type_4",
+                            "where assetId is null  GROUP BY  sender  order by  count desc  limit 10 )  sum) ) "))
+
+weighted_outdegree_SQL <- dbFetch(SQL)
+
+toc()
+
+
+
+
+
+
+
+library(reticulate)
+
+#get all transactions for the first adresse in weighted outdegree using neo4j
+use_python("C:\Users\PC\AppData\Local\Programs\Python\Python37")
+
+is_python_available <- py_available()
+#paste("Is Python Available?", is_python_available)
+
+
+uri = "bolt://localhost:7687"
+
+neo4j <-import("neo4j", convert = FALSE)
+token <- neo4j$basic_auth("neo4j","blockchain")
+driver <- neo4j$GraphDatabase$driver(uri, auth=token)
+the_session <- driver$session()
+tx <- the_session$begin_transaction()
+
+record <- tx$run("MATCH (p1:Sender)-[w:senden]->(r:Recipient) with  p1.num as p, SUM(toInteger(w.weight)) as sum   ORDER BY sum DESC limit 1  MATCH (s:Sender{num:toString(p)})-[w:senden]->(r1:Recipient) return s.num as from , r1.num as to , w.weight as weight  ")
+record_data <- record$data()
+
+
+dat<-py_to_r(record_data)
+
+#convertir list to dataframe
+ed <- data.frame(matrix(unlist(dat), ncol = max(lengths(dat)), byrow = TRUE))
+
+r<-as.data.frame(ed)
+
+rm( record )
+rm( record_data )
+rm( dat)
+rm( ed)
+
+#gc()
+edges<-r[,c(1,3,2)]
+colnames(edges)[colnames(edges)=="X1"] <- "from"
+colnames(edges)[colnames(edges)=="X2"] <- "to"
+colnames(edges)[colnames(edges)=="X3"] <- "weight"
+print(edges$from)
+head(edges)
+
+
+ede<-as.data.frame.ffdf(edges)
+rm(edges)
+
+
+ig <- graph_from_data_frame(ede, directed=TRUE)
+
+
+
+#export graph
+write_graph(ig, "Transactions_outdegree_Neo4.graphml", format ="graphml")
+
+
+
+
+
+
+
+
+
+#get weighted outdegree from neo4j
+tic()
+library(reticulate)
+
+
+use_python("C:\Users\PC\AppData\Local\Programs\Python\Python37")
+
+is_python_available <- py_available()
+#paste("Is Python Available?", is_python_available)
+
+
+uri = "bolt://localhost:7687"
+
+neo4j <-import("neo4j", convert = FALSE)
+token <- neo4j$basic_auth("neo4j","blockchain")
+driver <- neo4j$GraphDatabase$driver(uri, auth=token)
+the_session <- driver$session()
+tx <- the_session$begin_transaction()
+
+record <- tx$run("MATCH (p1:Sender)-[w:senden]->(r:Recipient) with  p1.num as p, SUM(toInteger(w.weight)) as sum   ORDER BY sum DESC limit 1  MATCH (s:Sender{num:toString(p)})-[w:senden]->(r1:Recipient) return s.num as from ")
+record_data <- record$data()
+weighted_outdegree_Neo4j<-py_to_r(record_data[0]["from"])
+
+toc()
+
+
+
+
+#get outdegree from sql
+tic()
+con <- dbConnect(drv = RMariaDB::MariaDB(), username = "extern",password = "extern123", host="node.wavesbi.com", port = 3306)
+
+
+sqlQ<-dbSendQuery(con, paste("select sender as  sender  from wavesBI.type_4",
+                           "where  sender= (SELECT   Sender  FROM ( (select count(*) AS sumamount, sender  Sender FROM wavesBI.type_4",
+                           "where assetId is null GROUP BY  sender  order by  sumamount desc)  sum) limit 1 ) group by (sender)  ;"))
+
+outdegree_SQL <- dbFetch(sqlQ)
+
+toc()
+
+#get  outdegree from neo4j
+tic()
+library(reticulate)
+
+
+use_python("C:\Users\PC\AppData\Local\Programs\Python\Python37")
+
+is_python_available <- py_available()
+#paste("Is Python Available?", is_python_available)
+
+
+uri = "bolt://localhost:7687"
+
+neo4j <-import("neo4j", convert = FALSE)
+token <- neo4j$basic_auth("neo4j","blockchain")
+driver <- neo4j$GraphDatabase$driver(uri, auth=token)
+the_session <- driver$session()
+tx <- the_session$begin_transaction()
+
+record <- tx$run("MATCH (p1:Sender)-[w:senden]->(r:Recipient) with  p1.num as p, count(*) as sum   ORDER BY sum DESC limit 1  MATCH (s:Sender{num:toString(p)})-[w:senden]->(r1:Recipient) return s.num as from limit 1")
+record_data <- record$data()
+from<-py_to_r(record_data[0]["from"])
+
+outdegree_Neo4j<-as.data.frame(from)
+toc()
+
+
+
+
+
+

@@ -1,0 +1,510 @@
+
+
+
+# install.packages("RODBC")
+
+libarary( RODBC)
+
+myConn <- odbcDriverConnect('driver={SQL Server};server=localhost;database=blockchain;trusted_connection=yes;')
+data <- odbcQuery(myConn,"select  r.id from recipient r, sender S, senden s1 wherematch (S-(s1)->r)")
+
+#download RNeo4j from github
+install.packages("devtools")
+devtools::install_github("nicolewhite/RNeo4j")
+
+
+
+
+install.packages("remotes")
+remotes::install_github("neo4j-rstats/neo4r")
+
+devtools::install_github("tidyverse/dplyr")
+install.packages("purrr")
+
+#load the package
+library(igraph)
+library(reticulate)
+library(ff)
+library(rlist)
+library(ggplot2)
+
+use_python("C:\Users\PC\AppData\Local\Programs\Python\Python37")
+
+is_python_available <- py_available()
+#paste("Is Python Available?", is_python_available)
+
+
+uri = "bolt://localhost:7687"
+
+neo4j <-import("neo4j", convert = FALSE)
+token <- neo4j$basic_auth("neo4j","blockchain")
+driver <- neo4j$GraphDatabase$driver(uri, auth=token)
+the_session <- driver$session()
+tx <- the_session$begin_transaction()
+ record <- tx$run("MATCH (p1:Sender)-[w:senden]->(r:Recipient)  RETURN p1.num as from,w.weight as weight,r.num as to")
+#record <- tx$run("MATCH (p1:Sender)-[w:senden]->(r:Recipient) with  p1.num as p, SUM(toInteger(w.weight)) as sum   ORDER BY sum DESC limit 1  MATCH (s:Sender{num:toString(p)})-[w:senden]->(r1:Recipient) return s.num as from")
+ record_data <- record$data()
+ 
+dat<-py_to_r(record_data)
+
+#convertir list to dataframe
+ed <- as.data.frame.ffdf(matrix(unlist(dat), nrow=13221801, byrow=3),stringsAsFactors=FALSE)
+r<-as.data.frame(ed)
+
+rm( record )
+rm( record_data )
+rm( dat)
+rm( ed)
+
+#gc()
+edges<-r[,c(1,3,2)]
+colnames(edges)[colnames(edges)=="V1"] <- "from"
+colnames(edges)[colnames(edges)=="V3"] <- "to"
+colnames(edges)[colnames(edges)=="V2"] <- "weight"
+print(edges$from)
+head(edges)
+
+
+ede<-as.data.frame.ffdf(edges)
+rm(edges)
+
+
+ig <- graph_from_data_frame(ede, directed=TRUE)
+print(ig, e=TRUE, v=TRUE)
+print(is_weighted(ig))
+#vertex<-as.data.frame(g1[["name"]])
+gc()
+
+ditance <-mean_distance(ig, directed = TRUE, unconnected = TRUE)
+#delete vertcies which have degree 0
+# Isolated = which((degree(ig,  mode = "in") < 100))
+# ig2 = delete.vertices(ig, Isolated)
+# print(ig2, e=TRUE, v=TRUE)
+# print(is_weighted(ig2))
+
+#export graph as graphml
+write_graph(ig2, "graph_indegree.graphml", format ="graphml")
+
+
+
+
+
+
+
+# n_files <- ceiling(nrow(ede)/1000000) # 2. identify how many files to make
+# 
+# chunk_starts <- seq(1, 1000000*n_files, by = 1000000) #  3. identify the rown number to start on
+# 
+# for (i in 1:n_files) { # 4. iterate through the csv to write the files
+#   chunk_end <- 1000000*i # 4a
+#   df_to_write <- slice(ede, chunk_starts[i]:chunk_end) # 4b
+#   fpath <- paste0("edege", "_", i, ".csv") # 4c
+#   write.csv(df_to_write,  fpath, row.names = FALSE, na="", sep=",",quote=F, append=T) # 4d
+#   message(paste0(fpath, " was written.")) # 4e
+# }
+
+
+
+
+
+
+
+
+#calculate in-degree
+indegree<- sort(degree(ig,  mode = "in"),decreasing = TRUE)
+degree_in<- as.data.frame(indegree)
+degree<-as.data.frame.ffdf(degree_in)
+
+#make to datframe with name
+indegree<- degree(ig,  mode = "in")
+indegree_df<-data.frame(Name=V(ig)$name,indegree=as.vector(indegree))
+indegree_df<-indegree_df[order(indegree_df$indegree,decreasing = TRUE),]
+
+
+library(gridExtra)
+grid.table(degree)
+
+m<-attributes(indegree)
+d<-as.data.frame(m[["names"]])
+d1<-as.data.frame.ffdf(d)
+
+# 
+# 
+# df3 = bind_rows(indegree, d)
+# head (degree_in)
+# 
+# 
+# #calculate out-degree
+outdegree<- sort(degree(ig,  mode = "out"),decreasing = TRUE)
+out_degree<- as.data.frame(outdegree)
+head(out_degree)
+
+
+# #calculate all-degree
+alldegree<- sort(degree(ig,  mode = "all"),decreasing = TRUE)
+all_degree<- as.data.frame(alldegree)
+head(all_degree)
+
+
+ 
+# #calculate weighted in-degree
+weightedindegree<-sort(strength(ig, mode = "in"),decreasing = TRUE)
+weighted_in_degree<-as.data.frame(weightedindegree)
+head(weightedindegree,20)
+
+ 
+# #calculate weighted out-degree
+weightedoutdegree<-sort(strength(ig, mode = "out"),decreasing = TRUE)
+weighted_out_degree<-as.data.frame(weightedoutdegree)
+
+
+
+#calculate eigen_centrality
+eigencentrality<- eigen_centrality(ig)
+edatr <- sort(eigencentrality[[1]], decreasing = TRUE)
+eigen_centrality<-as.data.frame(edatr)
+
+
+#calclute pagerank 
+
+pagerank<-page_rank(ig,  directed = TRUE, damping = 0.85, weights = NULL)
+page_rank<-data.frame(matrix(unlist(pagerank), nrow = max(lengths(pagerank)), ncol  = 1))
+# Mm <- unlist(eigencentrality)
+# attr<-attributes(Mm)
+# attr1<-attr["names"]
+# attr22<-attr1[["names"]]
+# dattr<-as.data.frame(attr22)
+# data <- data.frame(lapply(attr22, function(x) {
+#                  gsub("vector. ", "", x)}))
+
+
+
+#estimation closeness centrality
+closenessCentrality<-sort(estimate_closeness(ig, cutoff = 100 ),decreasing = TRUE)
+closeness_Centrality<-as.data.frame(closenessCentrality)
+
+#estimation betweenness centrality
+betweennessCentrality<-sort(estimate_betweenness(ig, cutoff = 100 ),decreasing = TRUE)
+betweenness_Centrality_<-as.data.frame(betweennessCentrality)
+datfra<-data.frame(name= betweenness_Centrality_[which (betweenness_Centrality_$betweennessCentrality>0),"betweennessCentrality"])
+#calclute cluster coficient
+cluster_cofic<-sort(transitivity(ig, type="local"),decreasing = TRUE)
+cluster_cofity_<-as.data.frame(cluster_cofic)
+
+
+
+hist.a <- hist(betweenness_Centrality_$betweennessCentrality, plot = FALSE)
+plot(hist.a$count, log = "xy",xaxt="n",type="h",lwd=10,lend=2)
+axis(1,at=1:length(hist.a$mids),labels=hist.a$mids)
+
+
+library("poweRlaw")
+m_bl = conpl$new(datfra$name)
+#estimate the lower-bound
+est = estimate_xmin(m_bl)
+#update the distribution object
+m_bl$setXmin(est)
+plot(m_bl)
+lines(m_bl, col=2, lwd=2)
+
+
+
+p <- ppoints(744444)
+
+plot(log(quantile(betweenness_Centrality_$betweennessCentrality,p=p)),log(1-p),
+     ylab="log[P(X > x)]",xlab="log(x)",main="CCDF: log-log")
+
+
+
+
+plot_degree_distribution = function(graph) {
+  # calculate degree
+  d = degree(ig_all, mode = "in")
+  d1<-as.data.frame(d)
+  dd = degree.distribution(ig_all, mode = "in", cumulative = TRUE)
+  degree = 1:max(d)
+  probability = dd[-1]
+  # delete blank values
+  nonzero.position = which(probability != 0)
+  probability = probability[nonzero.position]
+  degree = degree[nonzero.position]
+  # plot
+  plot(probability ~ degree   , log = "xy", xlab = "Degree (log)", ylab = "Probability (log)", 
+       col = 1, main = "out Degree Distribution")
+  
+}
+
+
+
+plot_degree_distribution(ig)
+
+
+
+# plot and fit the power law distribution
+fit_power_law = function(graph) {
+  # calculate degree
+  d = degree(graph, mode = "out")
+  dd = degree.distribution(graph, mode = "out", cumulative = FALSE)
+  degree = 1:max(d)
+  probability = dd[-1]
+  # delete blank values
+  nonzero.position = which(probability != 0)
+  probability = probability[nonzero.position]
+  degree = degree[nonzero.position]
+  reg = lm(log(probability) ~ log(degree))
+  cozf = coef(reg)
+  power.law.fit = function(x) exp(cozf[[1]] + cozf[[2]] * log(x))
+  alpha = -cozf[[2]]
+  R.square = summary(reg)$r.squared
+  print(paste("Alpha =", round(alpha, 3)))
+  print(paste("R square =", round(R.square, 3)))
+  # plot
+  plot(probability ~ degree, log = "xy", xlab = "Degree (log)", ylab = "Probability (log)", 
+       col = 1, main = "Degree Distribution")
+  curve(power.law.fit, col = "red", add = T, n = length(d))
+}
+
+
+fit_power_law(ig)
+
+#get the components 
+clusters<- clusters(ig)
+clusters
+length(clusters$csize)
+clusters$csize
+clustersize<-as.data.frame(clusters$csize)
+
+
+dist<-component_distribution(ig, cumulative = FALSE)
+did<-as.data.frame(dist)
+#Extrat memebership from cluster 
+
+clus<-data.frame(clustnum=unname(clusters$membership),adress=attr(clusters$membership,"names"))
+clust<-as.character(clus[which (clus$clustnum== 1), "adress"])
+
+
+
+ig.sub1 = induced.subgraph(ig,clust)
+
+cluster_walktrap(graph, weights = E(graph)$weight, steps = 4,
+                 merges = TRUE, modularity = TRUE, membership = TRUE)
+clusterlouvain <- walktrap.community(ig.sub1,weights = E(ig.sub1)$weight, steps = 4,
+                                     merges = TRUE, modularity = TRUE, membership = TRUE)
+
+write_graph(ig.sub1, "subgraph55.graphml", format ="graphml")
+
+
+
+# community n-clique
+a <- largest.cliques(ig.sub1)
+length(a)
+clique1 <- a[[1]]
+
+# subset the original graph by passing the clique vertices
+g2 <- induced.subgraph(ig.sub1,clique1)
+
+# plot the clique
+par(mfrow = c(1, 2))                    # set graphics to plot 1 row, 2 cols
+
+for(i in 1:length(a)){               # plot the 2 largest cliques
+  plot(induced_subgraph(ig.sub1, a[[i]]))
+}
+
+par(mfrow = c(1, 1)) 
+plot(g2)
+#calclute coreness 
+coer<-sort(coreness(ig, mode = "in"),decreasing = TRUE)
+maxCoerness<-max(coer)
+table(coer)
+coerness<-as.data.frame(coer)
+table<-table(coreness(ig))
+tab<-as.data.frame(table)
+hicore.node.names = V(ig)[coreness(ig)>4688]$name
+hicore.node<-as.data.frame(hicore.node.names)
+
+
+#get the membership of clusters
+cluster<-g.sub.clusters$membership
+#cluster<-data.frame(cluster)#change directed graph to undirected graph 
+
+
+ig <- graph_from_data_frame(ede, directed=FALSE)
+
+
+#get names of nodes with coreness more than 386
+ig.sub = induced.subgraph(ig,vids = which(coreness(ig,mode="all")>4688))
+#write_graph(ig.sub, "subgraph22.graphml", format ="graphml")
+
+#create clusters
+g.sub.clusters<-clusters(ig.sub)
+
+
+
+#find clusters in this sub-graph
+#g.sub.clusters = cluster_walktrap(ig.sub)
+
+
+
+#check the number of clusters
+length(g.sub.clusters$csize)
+
+#get the sizes of these clusters
+g.sub.clusters$csize
+
+
+#Extrat memebership from cluster 
+
+clus<-data.frame(clustnum=unname(g.sub.clusters$membership),adress=attr(g.sub.clusters$membership,"names"))
+clust<-as.character(clus[which (clus$clustnum== 4), "adress"])
+
+
+
+
+ig.sub1 = induced.subgraph(ig,clust)
+
+
+write_graph(ig.sub1, "subgraph222.graphml", format ="graphml")
+
+#plot 
+graph2<-simplify(ig.sub, edge.attr.comb=list(Weight="sum","ignore"),  remove.loops=TRUE)
+layout <-layout.fruchterman.reingold(graph2)
+#plot(graph2,layout=layout, vertex.label=NA)
+plot(graph2,layout=layout, edge.arrow.size=0.25,edge.arrow.mode = "-", vertex.label=NA ,vertex.color=g.sub.clusters$membership+1L )
+
+
+
+modularity(ig.sub,g.sub.clusters$membership)
+
+
+
+clus<-data.frame(clustnum=unname(g.sub.clusters$membership),adress=attr(g.sub.clusters$membership,"names"))
+clust<-as.character(clus[which (clus$clustnum== 1), "adress"])
+
+
+
+ig.sub1 = induced.subgraph(ig,clust)
+
+write_graph(ig.sub1, "subgraph222.graphml", format ="graphml")
+
+
+
+
+
+
+
+str (g.sub.clusters$membership)
+
+
+library(RMySQL)
+
+con<-dbConnect(RMySQL::MySQL(),user="extern",password="extern123",dbname="wavesBI",host="node.wavesbi.com")
+
+# Read MySQL table to data.frame
+#data <- dbReadTable(conn = con, name = 'type_4')
+
+
+
+count <- dbGetQuery(con, paste0("select sender as  sender, recipient as recipient , amount as amount from wavesBI.type_4 where sender= (SELECT   Sender  FROM ( (select SUM(amount) AS sumamount, sender  Sender FROM wavesBI.type_4 where  assetId IS NULL GROUP BY  sender  order by  sumamount desc)  sum) limit 1 )    ")) 
+count <- dbGetQuery(con, paste0("select count(sender ) from  from wavesBI.type_4 where ")) 
+library(tictoc)
+numofids <- 99000 # number of rows to include in each 'chunk'
+
+#count <- dbGetQuery(con, paste0("select sender as  sender, recipient as recipient , amount as amount from wavesBI.type_8 where sender= (SELECT   Sender  FROM ( (select SUM(amount) AS sumamount, sender  Sender FROM wavesBI.type_8  GROUP BY  sender  order by  sumamount desc)  sum) limit 1 )    ")) # get the number of rows returned from the table.
+count <- dbGetQuery(con, paste0("SELECT COUNT(*) as count FROM wavesBI.type_4  where  assetId IS NULL ")) # get the number of rows returned from the table.
+
+dbDisconnect(con)
+ns <- seq(1, count, numofids) # get sequence of rows to work over
+tosave <- data.frame() # data frame to bind results to
+# iterate through table to get data in 50k row chunks
+for(nextseries in ns){ # for each row
+  print(nextseries) # print the row it's on
+  con <- dbConnect(drv = RMariaDB::MariaDB(), username = "extern",password = "extern123", host="node.wavesbi.com", port = 3306)
+   #con<-dbConnect(RMySQL::MySQL(),user="extern",password="extern123",dbname="wavesBI",host="node.wavesbi.com")
+  d1 <- dbGetQuery(con, paste0("select cast, sender , amountAsset,  priceAsset,   amount,  time1,  recipient,  amount2,  time2   from ( (select cast(name as CHAR) as cast, order1_senderPublicKey as sender , order1_assetPair_amountAsset as amountAsset, order1_assetPair_priceAsset as priceAsset, order1_amount as  amount, order1_timestamp as time1, order2_senderPublicKey as recipient, order2_amount as amount2, order2_timestamp as time2  from wavesBI.type_7 inner join wavesBI.type_3 on type_7.order1_assetPair_PriceAsset =  type_3.assetid where (cast(name as CHAR)="WBTC") limit 10) UNION (select cast(name as CHAR) as cast,order1_senderPublicKey as sender , order1_assetPair_amountAsset as amountAsset, order1_assetPair_priceAsset as priceAsset, order1_amount as  amount, order1_timestamp as time1, order2_senderPublicKey as recipient, order2_amount as amount2, order2_timestamp as time2   from wavesBI.type_7 inner join wavesBI.type_3 on type_7.order1_assetPair_amountAsset =  type_3.assetid where (cast(name as CHAR)=WBTC) limit 10) )t   limit 10 ", nextseries,",",numofids)) # extract data in chunks of 50k rows
+  dbDisconnect(con)
+  # bind data to tosave dataframe. (the ifelse is avoid an error when it tries to rbind d1 to an empty dataframe on the first pass).
+  if(nrow(tosave)>0){
+    tosave <- rbind(tosave, d1)
+  }else{
+    tosave <- d1
+  }
+}
+
+
+
+
+install.packages("RMariaDB")
+
+
+library(RMariaDB)
+
+con <- dbConnect(drv = RMariaDB::MariaDB(), username = "extern",password = "extern123", host="node.wavesbi.com", port = 3306)
+d2 <- dbGetQuery(con, paste0("select count(recipient)  from wavesBI.type_4 where assetId is null")) # extract data in chunks of 50k rows
+dbDisconnect(con)
+
+#Removing Self-Loops (Repondents Nominating Themselves)
+graph2<-simplify(ig.sub, edge.attr.comb=list(Weight="sum","ignore"),  remove.loops=TRUE)
+
+
+ #Layout Options
+
+ l <- layout_with_lgl(graph2, maxiter = 150, maxdelta = vcount(graph2),
+                      area = vcount(graph2)^2, coolexp = 1.5, cellsize = sqrt(sqrt(area)), root = NULL)
+# vcount
+ is_weighted(ig)
+
+# #Node or Vetex Options: Size and Color
+V(graph2)$color <- "blue"
+
+ # We could also use the audience size value:
+ # V(graph2)$size <- V(graph2)$audience.size*0.6
+
+  #Edge Options: Color
+ E(graph2)$color <- "grey"
+  par(mar=c(5.1, 4.1, 4.1, 2.1), mgp=c(3, 1, 0), las=0)
+ #Plotting, Now Specifying an arrow size and getting rid of arrow heads
+ #We are letting the color and the size of the node indicate the directed nature of the graph
+ plot(graph2, edge.arrow.size=0.25,edge.arrow.mode = "-", vertex.label=NA  )
+plot(ig, vertex.size=10, vertex.label=NA)
+
+
+
+
+
+
+
+
+
+
+
+
+
+#Removing Self-Loops (Repondents Nominating Themselves)
+graph2<-simplify(ig.sub, edge.attr.comb=list(Weight="sum","ignore"),  remove.loops=TRUE)
+
+
+ #Layout Options
+
+ l <- layout_with_lgl(graph2, maxiter = 150, maxdelta = vcount(graph2),
+                      area = vcount(graph2)^2, coolexp = 1.5, cellsize = sqrt(sqrt(area)), root = NULL)
+# vcount
+ is_weighted(ig)
+
+# #Node or Vetex Options: Size and Color
+V(graph2)$color <- "blue"
+V(graph2)$size=(strength(ig, mode = "in")/sum(edges$weight))*100
+ # We could also use the audience size value:
+ # V(graph2)$size <- V(graph2)$audience.size*0.6
+
+  #Edge Options: Color
+ E(graph2)$color <- "grey"
+  par(mar=c(5.1, 4.1, 4.1, 2.1), mgp=c(3, 1, 0), las=0)
+ #Plotting, Now Specifying an arrow size and getting rid of arrow heads
+ #We are letting the color and the size of the node indicate the directed nature of the graph
+ plot(graph2, edge.arrow.size=0.25,edge.arrow.mode = "-", vertex.label=NA  )
+plot(ig, vertex.size=10, vertex.label=NA)
+
+#call apoc.periodic.iterate('MATCH (p1:Sender)-[w:senden]->(r:Recipient)  RETURN p1,w,r', ' ' ,{batchSize:10000, iterateList:true, parallel:true})
+
+ 
+

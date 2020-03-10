@@ -1,0 +1,970 @@
+
+
+library(RMariaDB)
+
+
+con <- dbConnect(drv = RMariaDB::MariaDB(), username = "extern",password = "extern123", host="node.wavesbi.com", port = 3306)
+
+tic()
+SQL<-dbSendQuery(con, paste(" select sender as  sender , recipient as recpient from wavesBI.type_4 ",
+                            " where ((sender   in  (SELECT   Sender as sender  FROM  (select SUM(amount) AS sumamount, sender  Sender  FROM wavesBI.type_4  where assetId is null GROUP BY  sender  order by  sumamount desc limit 1) as sum) )",
+                            "or    ( recipient in  (SELECT    Sender as recipient FROM  (select SUM(amount) AS sumamount, sender  Sender  FROM wavesBI.type_4 where assetId is null GROUP BY  sender  order by  sumamount desc limit 1) as sum))) "))
+
+Transactions_outdegree_SQL <- dbFetch(SQL)
+
+#extract sender
+sender<-  as.data.frame(unique(Transactions_outdegree_SQL[["sender"]]))
+
+
+
+install.packages("reticulate")
+library(reticulate)
+library(tictoc)
+library(igraph)
+library(ff)
+library(rlist)
+
+
+use_python("C:\Users\PC\AppData\Local\Programs\Python\Python37")
+
+is_python_available <- py_available()
+#paste("Is Python Available?", is_python_available)
+
+
+uri = "bolt://localhost:7687"
+
+neo4j <-import("neo4j", convert = FALSE)
+token <- neo4j$basic_auth("neo4j","blockchain")
+driver <- neo4j$GraphDatabase$driver(uri, auth=token)
+the_session <- driver$session()
+tx <- the_session$begin_transaction()
+
+record <- tx$run("MATCH (p1:Sender)-[w:senden]->(r:Recipient) with  p1.num as p, count(p1.num) as sum   ORDER BY sum DESC limit 1  MATCH (s:Sender)-[w:senden]->(r1:Recipient) where s.num = toString(p) or  r1.num = toString(p)  return s.num as from , r1.num as to , w.weight as weight ")
+record_data <- record$data()
+dat_one<-py_to_r(record_data)
+ed_one <- data.frame(matrix(unlist(dat_one), ncol = max(lengths(dat_one)), byrow = TRUE))
+
+
+r<-as.data.frame(ed_one)
+
+colnames(ed_one)[colnames(ed_one)=="X1"] <- "from"
+colnames(ed_one)[colnames(ed_one)=="X2"] <- "to"
+colnames(ed_one)[colnames(ed_one)=="X3"] <- "weight"
+
+
+
+ig_one <- graph_from_data_frame(ed_one, directed=TRUE)
+
+rm(dat_one )
+rm(ed_one)
+rm(r)
+rm(record_data )
+rm(record)
+
+
+
+use_python("C:\Users\PC\AppData\Local\Programs\Python\Python37")
+
+is_python_available <- py_available()
+#paste("Is Python Available?", is_python_available)
+
+
+uri = "bolt://localhost:7687"
+
+neo4j <-import("neo4j", convert = FALSE)
+token <- neo4j$basic_auth("neo4j","blockchain")
+driver <- neo4j$GraphDatabase$driver(uri, auth=token)
+the_session <- driver$session()
+tx <- the_session$begin_transaction()
+
+record <- tx$run("with ['3P6fqv7igRGFdUkwsyNPe2DuUvgWm5JsWTe','3PEf4d4vVbVF1sHPrn1VbuyBXeJHka2p289'] as id     MATCH (p1:Sender)-[w:senden]->(r:Recipient)
+                      WHERE p1.num in id or r.num in id
+                      with DISTINCT ((COLLECT(DISTINCT(r.num)) ) +  (COLLECT (DISTINCT(p1.num))  ))as taw
+                      UNWIND taw AS x
+                      WITH DISTINCT x
+                      with  collect(x) AS list
+                      MATCH (p1:Sender)-[w:senden]->(r:Recipient)
+                      WHERE p1.num in list or r.num in list 
+                      return p1.num as from , r.num as to , w.weight as weight")
+record_data <- record$data()
+dat<-py_to_r(record_data)
+ed <- data.frame(matrix(unlist(dat), ncol = max(lengths(dat)), byrow = TRUE))
+
+
+colnames(ed)[colnames(ed)=="X1"] <- "from"
+colnames(ed)[colnames(ed)=="X2"] <- "to"
+colnames(ed)[colnames(ed)=="X3"] <- "weight"
+
+ig2 <- graph_from_data_frame(ed, directed=FALSE)
+
+d = degree(ig2, mode = "out")
+d1<-as.data.frame(d)
+dd = degree.distribution(ig2, mode = "out", cumulative = FALSE)
+degree = 1:max(d)
+probability = dd[-1]
+# delete blank values
+nonzero.position = which(probability != 0)
+probability = probability[nonzero.position]
+degree = degree[nonzero.position]
+# plot
+plot(probability ~ degree   , log = "xy", xlab = "Degree (log)", ylab = "Probability (log)", 
+     col = 1, main = "Degree Distribution")
+
+
+
+
+
+#community detection with cluster lovain
+
+louvain<-cluster_louvain(ig2)
+
+mod<-modularity(ig2,louvain$membership)
+
+
+clusd<-data.frame(clustnum=louvain[1])
+ig2.subgraph = induced.subgraph(ig1,as.character(clusd$X1))
+
+write_graph(ig2.subgraph, "subgraph2222.graphml", format ="graphml")
+
+
+
+ig <- graph_from_data_frame(ede, directed=F)
+
+#get the components 
+clusters<- clusters(ig)
+clusters
+length(clusters$csize)
+clusters$csize
+clustersize<-as.data.frame(clusters$csize)
+
+
+#get cluster number 1
+clus<-data.frame(clustnum=unname(clusters$membership),adress=attr(clusters$membership,"names"))
+clust<-as.character(clus[which (clus$clustnum== 1), "adress"])
+
+#create subgraph to apply  the community algorithm
+ig.sub1 = induced.subgraph(ig,clust)
+
+#calclute the community with cluster louvain algorithm
+louvain_haupt<-cluster_louvain(ig.sub1)
+
+
+#calclute modularity
+mod1<-modularity(ig.sub1,louvain_haupt$membership)
+
+
+# order the result of the cluster number
+lovian_h_dataframe <- data.frame(adress=louvain_haupt$names, clus_num=louvain_haupt$membership)
+lovian_h_sort <- lovian_h_dataframe[order(lovian_h_dataframe$clus_num),]
+
+
+
+# get the cluster which has the max number of membership and export it as graphml 
+library(tidyverse)
+
+occurence<-lovian_h_sort %>% count(clus_num, sort = TRUE)
+max_cluster_memebership<-occurence$clus_num[1]
+
+clust_max_memebership<-as.character(lovian_h_sort[which (lovian_h_sort$clus_num==max_cluster_memebership ), "adress"])
+
+ig.sub_haupt = induced.subgraph(ig,clust_max_memebership)
+write_graph(ig.sub_haupt, "graph_community.graphml", format ="graphml")
+
+
+ig5 <- graph_from_data_frame(ede, directed=TRUE)
+
+#make to datframe with name
+indegree<- degree(ig5,  mode = "in")
+indegree_df<-data.frame(Name=V(ig5)$name,indegree=as.vector(indegree))
+indegree_df<-indegree_df[order(indegree_df$indegree,decreasing = TRUE),]
+
+#make to datframe with name
+outdegree<- degree(ig5,  mode = "out")
+outdegree_df<-data.frame(Name=V(ig5)$name,outdegree=as.vector(outdegree))
+outdegree_df<-outdegree_df[order(outdegree_df$outdegree,decreasing = TRUE),]
+
+
+
+
+Relation_cor= function(df1,df2){
+  
+  
+  out_degree<-as.data.frame( df1[1:100 ,1]) 
+  x1 <- c("Name")
+  colnames(out_degree) <- x1
+  
+  
+  in_degree<-as.data.frame(  df2[1:100,1]) 
+  x1 <- c("Name")
+  colnames(in_degree) <- x1
+  
+  
+  
+  bind<-rbind(out_degree,in_degree)
+  bind_un<- data.frame(Name=unique(bind$Name))
+  bind_unique<-data.frame(Name=unique(bind$Name), num=seq(1,nrow(bind_un)))
+  
+  in_degree_merge<-merge(in_degree, bind_unique, by = "Name")
+  out_degree_merge<-merge(out_degree, bind_unique, by = "Name")
+  
+  Correlation<-cor(in_degree_merge$num,out_degree_merge$num)
+  
+  print(Correlation)
+  return (Correlation)
+}
+
+corr1<-Relation_cor(outdegree_df,indegree_df)
+
+
+
+
+#get informations for list
+use_python("C:\Users\PC\AppData\Local\Programs\Python\Python37")
+
+is_python_available <- py_available()
+#paste("Is Python Available?", is_python_available)
+
+
+uri = "bolt://localhost:7687"
+
+neo4j <-import("neo4j", convert = FALSE)
+token <- neo4j$basic_auth("neo4j","blockchain")
+driver <- neo4j$GraphDatabase$driver(uri, auth=token)
+the_session <- driver$session()
+tx <- the_session$begin_transaction()
+
+record <- tx$run("with ['3PAASSqnygiyYoQuqmXpwaSUJmRkqytwPaw','3PLrCnhKyX5iFbGDxbqqMvea5VAqxMcinPW'] as id     MATCH (p1:Sender)-[w:senden]->(r:Recipient)
+                      WHERE p1.num in id or r.num in id
+                      with DISTINCT ((COLLECT(DISTINCT(r.num)) ) +  (COLLECT (DISTINCT(p1.num))  ))as taw
+                      UNWIND taw AS x
+                      WITH DISTINCT x
+                      with  collect(x) AS list
+                      MATCH (p1:Sender)-[w:senden]->(r:Recipient)
+                      WHERE p1.num in list or r.num in list 
+                      return p1.num as from , r.num as to , w.weight as weight")
+record_data <- record$data()
+dat_list<-py_to_r(record_data)
+
+
+
+ed_list <- data.frame(matrix(unlist(dat_list), ncol = max(lengths(dat_list)), byrow = TRUE))
+
+
+colnames(ed_list)[colnames(ed_list)=="X1"] <- "from"
+colnames(ed_list)[colnames(ed_list)=="X2"] <- "to"
+colnames(ed_list)[colnames(ed_list)=="X3"] <- "weight"
+
+ig_list <- graph_from_data_frame(ed_list, directed=FALSE)
+
+rm(dat_list )
+rm(ed_list)
+
+rm(record_data )
+rm(record)
+
+
+louvain_list<-cluster_louvain(ig_list)
+
+mod_list<-modularity(ig_list,louvain_list$membership)
+
+
+lovian_list_dataframe <- data.frame(adress=louvain_list$names, clus_num=louvain_list$membership)
+lovian_list_sort <- lovian_list_dataframe[order(lovian_list_dataframe$clus_num, decreasing= TRUE),]
+
+
+
+
+#get all information
+
+use_python("C:\Users\PC\AppData\Local\Programs\Python\Python37")
+
+is_python_available <- py_available()
+#paste("Is Python Available?", is_python_available)
+
+
+uri = "bolt://localhost:7687"
+
+neo4j <-import("neo4j", convert = FALSE)
+token <- neo4j$basic_auth("neo4j","blockchain")
+driver <- neo4j$GraphDatabase$driver(uri, auth=token)
+the_session <- driver$session()
+tx <- the_session$begin_transaction()
+record <- tx$run("MATCH (p1:Sender)-[w:senden]->(r:Recipient)  RETURN p1.num as from,w.weight as weight,r.num as to")
+#record <- tx$run("MATCH (p1:Sender)-[w:senden]->(r:Recipient) with  p1.num as p, SUM(toInteger(w.weight)) as sum   ORDER BY sum DESC limit 1  MATCH (s:Sender{num:toString(p)})-[w:senden]->(r1:Recipient) return s.num as from")
+record_data <- record$data()
+
+dat_all<-py_to_r(record_data)
+
+#convertir list to dataframe
+ed_all <- as.data.frame.ffdf(matrix(unlist(dat_all), nrow=13221801, byrow=3),stringsAsFactors=FALSE)
+r<-as.data.frame(ed_all)
+
+rm( record )
+rm( record_data )
+rm( dat_all)
+rm( ed_all)
+
+#gc()
+edges_all<-r[,c(1,3,2)]
+colnames(edges_all)[colnames(edges_all)=="V1"] <- "from"
+colnames(edges_all)[colnames(edges_all)=="V3"] <- "to"
+colnames(edges_all)[colnames(edges_all)=="V2"] <- "weight"
+print(edges_all$from)
+head(edges_all)
+
+
+ede_all<-as.data.frame.ffdf(edges_all)
+rm(edges_all)
+
+
+ig_all <- graph_from_data_frame(ede_all, directed=TRUE)
+ig_all_undirect<-graph_from_data_frame(ede_all, directed=F)
+print(ig_all, e=TRUE, v=TRUE)
+print(is_weighted(ig_all))
+#vertex<-as.data.frame(g1[["name"]])
+gc()
+write_graph(ig_all, "ig_allddd.graphml", format ="graphml")
+
+#calculate in-degree
+indegree<- degree(ig_all,  mode = "in")
+indegree_df<-data.frame(Name=V(ig_all)$name,indegree=as.vector(indegree))
+indegree_df_all<-indegree_df[order(indegree_df$indegree,decreasing = TRUE),]
+
+#calculate out-degree
+outdegree<- degree(ig_all,  mode = "out")
+outdegree_df<-data.frame(Name=V(ig_all)$name,outdegree=as.vector(outdegree))
+outdegree_df_all<-outdegree_df[order(outdegree_df$outdegree,decreasing = TRUE),]
+
+
+# calculate weighted in-degree
+weightedindegree<-sort(strength(ig_all, mode = "in"),decreasing = TRUE)
+weighted_in_degree<-data.frame(Name = attributes((unlist(weightedindegree)))["names"],score=weightedindegree)
+ Mm <- unlist(weightedindegree)
+ attr<-attributes(Mm)
+ attr1<-attr["names"]
+head(weightedindegree,20)
+
+
+# calculate weighted out-degree
+weightedoutdegree<-sort(strength(ig_all, mode = "out"),decreasing = TRUE)
+weighted_out_degree<-data.frame(Name = attributes((unlist(weightedoutdegree)))["names"],score=weightedoutdegree)
+
+
+
+#estimation closeness centrality
+closenessCentrality<-estimate_closeness(ig_all, cutoff = 100 )
+closeness_Centrality<-data.frame(Name=V(ig_all)$name,closenessC=as.vector(closenessCentrality))
+closeness_Centrality_sort <-closeness_Centrality[order(closeness_Centrality$closenessC,decreasing = TRUE),]
+
+#estimation betweenness centrality
+betweennessCentrality<-estimate_betweenness(ig_all, cutoff = 100 )
+betweenness_Centrality<-data.frame(Name=V(ig_all)$name,betwennessC=as.vector(betweennessCentrality))
+betweenness_Centrality_sort <-betweenness_Centrality[order(betweenness_Centrality$betwennessC,decreasing = TRUE),]
+
+
+#calculate eigen_centrality
+eigencentrality<- eigen_centrality(ig_all)
+eigen_centrality<-data.frame(Name=V(ig_all)$name,eigenC=as.vector(eigencentrality[[1]]))
+eigen_centrality_sort <-eigen_centrality[order(eigen_centrality$eigenC,decreasing = TRUE),]
+
+
+#calclute pagerank 
+
+pagerank<-page_rank(ig_all,  directed = TRUE, damping = 0.85, weights = NULL)
+pagerank_Centrality<-data.frame(Name=V(ig_all)$name,pagerankC=as.vector(pagerank$vector))
+pagerank_Centrality_sort <-pagerank_Centrality[order(pagerank_Centrality$pagerankC,decreasing = TRUE),]
+
+library(ggplot2)
+library(gridExtra)
+plot_degree_distribution = function(graph) {
+  # calculate degree
+  d = degree(ig_all, mode = "in")
+  d1<-as.data.frame(d)
+  dd = degree.distribution(ig_all, mode = "in", cumulative = FALSE)
+  degree = 1:max(d)
+  probability = dd[-1]
+  # delete blank values
+  nonzero.position = which(probability != 0)
+  probability = probability[nonzero.position]
+  degree = degree[nonzero.position]
+  # plot
+plot(y=probability , x= degree   ,log = "xy", xlab = "Degree ", ylab = "Frequency", col = 1, main = " ")
+
+
+d1 = degree(ig_all, mode = "in")
+
+dd1 = degree.distribution(ig_all, mode = "out", cumulative = FALSE)
+degree = 1:max(d1)
+probability1 = dd1[-1]
+# delete blank values
+nonzero.position = which(probability1 != 0)
+probability1 = probability1[nonzero.position]
+degree = degree[nonzero.position]
+# plot
+plot(y=probability , x= degree   ,log = "xy", xlab = "Degree ", ylab = "size", col = 1, main = "Degree Distribution in")
+
+}
+install.packages("ggplot2", dependencies = TRUE)
+
+
+
+plot_degree_distribution(ig_all)
+
+
+ig_all_louvian <- graph_from_data_frame(ede_all, directed=FALSE)
+
+
+#get the components 
+clusters_all_louvian<-components(ig_all )
+clusters_all_louvian
+length(clusters_all_louvian$csize)
+clusters_all_louvian$csize
+clustersize<-as.data.frame(clusters_all_louvian$csize)
+
+
+#get cluster number 1
+clus_all_louvian<-data.frame(clustnum=unname(clusters_all_louvian$membership),adress=attr(clusters_all_louvian$membership,"names"))
+clust_all_louvian<-as.character(clus_all_louvian[which (clus_all_louvian$clustnum== 1), "adress"])
+
+
+#create subgraph to apply  the community algorithm
+ig.sub_all_louvian = induced.subgraph(ig_all_louvian,clust_all_louvian)
+
+#calclute the community with cluster louvain algorithm
+louvain__all_louvian<-cluster_louvain(ig.sub_all_louvian)
+clustergivmany<-cluster_edge_betweenness(ig.sub_all_louvian, weights = E(ig.sub_all_louvian)$weight,
+                         directed = TRUE, edge.betweenness = TRUE, merges = TRUE,
+                         bridges = TRUE, modularity = TRUE, membership = TRUE)
+
+#calclute modularity
+mod_all_louvian<-modularity(ig.sub_all_louvian,louvain__all_louvian$membership)
+
+mod<-data.frame(mod_all_louvian)
+
+# order the result of the cluster number
+lovian_all_dataframe <- data.frame(adress=louvain__all_louvian$names, clus_num=louvain__all_louvian$membership)
+lovian_all_sort <- lovian_all_dataframe[order(lovian_all_dataframe$clus_num),]
+
+
+# get the cluster which has the max number of membership and export it as graphml 
+library(tidyverse)
+
+occurence_all<-lovian_all_sort %>% count(clus_num, sort = TRUE)
+max_cluster_memebership_all<-occurence_all$clus_num[1]
+
+clust_max_memebership_all<-as.character(lovian_all_sort[which (lovian_all_sort$clus_num==max_cluster_memebership_all ), "adress"])
+
+ig.sub_all = induced.subgraph(ig_all,clust_max_memebership_all)
+write_graph(ig.sub_all, "graph_community.graphml", format ="graphml")
+ig.sub_all_undirect = induced.subgraph(ig_all_undirect,clust_max_memebership_all)
+
+louvain__all_louvian_undirect<-cluster_louvain(ig.sub_all_undirect)
+
+
+xy.list <- split(xy.df, seq(nrow(xy.df)))
+nodes_of_interest <- split(xy.df, seq(nrow(xy.df)))
+
+df<-data.frame(Adresse=character(),most_sender =character(),Number=numeric(),most_recipient=character(),
+               Number=numeric(),most_sender_W =character(),Volume=numeric(),most_recipient_W=character(),
+               Volume=numeric(),page_rank_score=numeric(), eigenvector_score=numeric(),Betweeness_score=numeric(),closeness_score=numeric(), stringsAsFactors=FALSE)
+for(i in 16){ 
+  print(i)
+  
+ego_all<-ego(ig_all, order = 3, nodes = which(V(ig_all)$name==nc16$adress), mode =  "in", mindist = 0)
+ed_ego_all<- as_ids(ego_all[[1]][[name]] )
+eg<-data.frame(ed_ego_all)
+
+
+avector <- as.vector(eg$ed_ego_all)
+
+
+
+
+list_of_edges <-E(ig_all)[V(ig_all)[name==i] %<-% V(ig_all)[name %in% avector ]]
+subgraph <- subgraph.edges(ig_all, list_of_edges)
+
+write_graph(subgraph , "subgraphjarbbb.graphml", format ="graphml")
+
+#calculate out-degree
+outdegree_sub<- degree(subgraph,  mode = "out")
+outdegree_df_sub<-data.frame(Name=V(subgraph)$name,outdegree=as.vector(outdegree_sub))
+outdegree_df_all_sub<-outdegree_df_sub[order(outdegree_df_sub$outdegree,decreasing = TRUE),]
+
+weightedoutdegree<-sort(strength(subgraph, mode = "out"),decreasing = TRUE)
+weightedoutdegree_sub<-data.frame(Name=V(subgraph)$name,outdegree=as.vector(weightedoutdegree))
+weightedoutdegree_sub_sort<-weightedoutdegree_sub[order(weightedoutdegree_sub$outdegree,decreasing = TRUE),]
+#get the most recipient
+
+ego_all_r<-ego(ig_all, order = 1, nodes = which(V(ig_all)$name==i), mode =  "out", mindist = 0)
+ed_ego_all_r<- as_ids(ego_all_r[[1]][[name]] )
+eg_r<-data.frame(ed_ego_all_r)
+
+avector_r <- as.vector(eg_r$ed_ego_all)
+list_of_edges_r <-E(ig_all)[V(ig_all)[name==i] %->% V(ig_all)[name %in% avector_r ]]
+subgraph_r <- subgraph.edges(ig_all, list_of_edges_r)
+write_graph(subgraph_r , "subgraphjarbbb.graphml", format ="graphml")
+
+#calculate out-degree
+indegree_sub_r<- degree(subgraph_r,  mode = "in")
+indegree_df_sub_r<-data.frame(Name=V(subgraph_r)$name,indegree=as.vector(indegree_sub_r))
+indegree_df_all_sub_r<-indegree_df_sub_r[order(indegree_df_sub_r$indegree,decreasing = TRUE),]
+
+
+weightedindegree<-sort(strength(subgraph, mode = "in"),decreasing = TRUE)
+weightedindegree_sub<-data.frame(Name=V(subgraph)$name,indegree=as.vector(weightedindegree))
+weightedindegree_sub_sort<-weightedindegree_sub[order(weightedindegree_sub$indegree,decreasing = TRUE),]
+
+bet<-betweenness_Centrality_sort[which (betweenness_Centrality_sort$Name==i),"betwennessC"]
+clos<-closeness_Centrality_sort[which (closeness_Centrality_sort$Name==i),"closenessC"]
+eigenvector<-eigen_centrality_sort[which (eigen_centrality_sort$Name==i),"eigenC"]
+pageranke<-pagerank_Centrality_sort[which (pagerank_Centrality_sort$Name==i),"pagerankC"]
+
+df<-rbind(df, data.frame(Adresse= i,most_sender = outdegree_df_all_sub[1,1],Number=outdegree_df_all_sub[1,2],
+                         most_recipient=indegree_df_all_sub_r[1,1],Number=indegree_df_all_sub_r[1,2],
+                         most_sender_w =weightedoutdegree_sub_sort[1,1],Volume=weightedoutdegree_sub_sort[1,2],
+                         most_recipient_w =weightedindegree_sub_sort[1,1],Volume=weightedindegree_sub_sort[1,2],
+                         eigenvector_score=eigenvector,page_rank_score= pageranke,Betweeness_score=bet,closeness_score=clos))
+
+
+
+}
+
+
+
+egchar<-as.character(eg$ed_ego_all)
+egchar.sub_all = induced.subgraph(ig_all,egchar)
+
+write_graph(egchar.sub_all, "graph_egchar.graphml", format ="graphml")
+
+
+egchar_louvian<-clusters( egchar.sub_all)
+length(egchar_louvian$csize)
+egchar_louvian$csize
+clustersize<-as.data.frame(egchar_louvian$csize)
+
+
+
+ech<- data.frame (get.edgelist(egchar.sub_all), weight= E(egchar.sub_all)$weight)
+colnames(ech)[colnames(ech)=="X1"] <- "from"
+colnames(ech)[colnames(ech)=="X2"] <- "to"
+
+ech_undirect<-graph_from_data_frame(ech, directed=T)
+
+adj<-as_adjacency_matrix(ech_undirect, type = "both",
+                    attr = NULL, edges = FALSE, names = TRUE,
+                    sparse = igraph_opt("sparsematrices"))
+knn<- nng(ech_undirect,k=2)
+egchar_louvian<-cluster_louvain(ech_undirect)
+
+
+#calclute modularity
+mod_egchar_louvian<-modularity(ech_undirect,egchar_louvian$membership)
+
+
+
+# order the result of the cluster number
+egchar_dataframe <- data.frame(adress=egchar_louvian$names, clus_num=egchar_louvian$membership)
+egchar_sort <- egchar_dataframe[order(egchar_dataframe$clus_num),]
+
+ct <-as.character( egchar_sort[which(egchar_sort$clus_num=="9" ),"adress"])
+ct.sub_all = induced.subgraph(egchar.sub_all,ct)
+
+write_graph(ct.sub_all, "graph_ct.graphml", format ="graphml")
+
+t<-all_simple_paths(ct.sub_all,from =V(ct.sub_all)$name=="3P6wdKoCyiVtPxkd4aZKH1cmocdWdFK9wAz", to=V(ct.sub_all)$name=="3PNug6MW1LDnpJaYefJoVXcwtxydngamPav", mode="out" )
+
+
+
+
+ct <-as.character( lovian_all_sort[which(lovian_all_sort$clus_num=="1392" ),"adress"])
+ct.sub_all = induced.subgraph(ig_all,ct)
+
+write_graph(ct.sub_all, "graph_co.graphml", format ="graphml")
+
+
+
+t<-all_simple_paths(ct.sub_all,from =V(ct.sub_all)$name=="3P6wdKoCyiVtPxkd4aZKH1cmocdWdFK9wAz", to=V(ct.sub_all)$name=="3PNug6MW1LDnpJaYefJoVXcwtxydngamPav", mode="out" )
+
+
+balnced_adress<-read.csv("the most100 evalation.csv")
+x1 <- c("Name")
+colnames(balnced_adress) <- x1
+
+library(plyr)
+Similarity_cor= function(df1,df2){
+  
+  
+  out_degree<-as.data.frame( closeness_Centrality_sort[1:100 ,1]) 
+  x1 <- c("Name")
+  colnames(out_degree) <- x1
+  
+  
+  in_degree<-as.data.frame( outdegree_df_all [1:100,1]) 
+  x1 <- c("Name")
+  colnames(in_degree) <- x1
+  
+  
+  
+  bind<-rbind(out_degree,in_degree)
+  bind_un<- data.frame(Name=unique(bind$Name))
+  bind_unique<-data.frame(Name=unique(bind$Name), num=seq(1,nrow(bind_un)))
+  
+  indegree_cor<- data.frame(Name= in_degree$Name)
+  outdegree_cor<-data.frame(Name= out_degree$Name)
+  in_degree_merge<-join(indegree_cor, bind_unique)
+  out_degree_merge<-join(out_degree, bind_unique)
+  
+cor  <-cor(x=indegree_df_all$indegree[1:100], y=indegree_df_all$indegree[1:100] , method = "pearson")
+ 
+ corr <- cor.test(x=outdegree_df_all$outdegree, y=outdegree_df_all$outdegree , method = 'spearman')
+  return (sim)
+}
+str(indegree_df_all$indegree)
+IN<-data.frame(num= as.integer(outdegree_df_all$outdegree))
+
+
+
+library(dbplyr)
+corr1<-Similarity_cor(closeness_Centrality_sort,eigen_centrality_sort)
+corr11<-data.frame(corr1)
+x<-0
+for (i in 1:nrow(in_degree_merge)) {
+  
+  for (j in 1:nrow(out_degree_merge))
+  {
+    if (in_degree_merge$num[i] == out_degree_merge$num[j])
+    {
+      
+      x<-x+1
+    }
+  }
+  
+}
+porcent<- ((x/nrow(out_degree_merge))*100)
+
+
+return (porcent)
+
+library('clusteval')
+
+
+Jaccard = function (x, y) {
+  M.11 = sum(x == 1 & y == 1)
+  M.10 = sum(x == 1 & y == 0)
+  M.01 = sum(x == 0 & y == 1)
+  return (M.11 / (M.11 + M.10 + M.01))
+}
+
+input.variables = data.frame(in_degree_merge$num[1:100],in_degree_merge$num[1:100])
+
+m = matrix(data = NA, nrow = length(input.variables), ncol = length(input.variables))
+for (r in 1:length(input.variables)) {
+  for (c in 1:length(input.variables)) {
+    if (c == r) {
+      m[r,c] = 1
+    } else if (c > r) {
+      m[r,c] = Jaccard(input.variables[,r], input.variables[,c])
+    }
+  }
+}
+
+variable.names = sapply(input.variables, attr, "label")
+colnames(m) = variable.names
+rownames(m) = variable.names   
+
+jaccards = m
+
+
+#calculate cluster ccoefficient 
+cluster_cofic<-sort(transitivity(ig_all, type="local"),decreasing = TRUE)
+cluster_cofity_<-data.frame(cluster_cofic)
+
+avrage_cluster<-data.frame(averagge =mean(cluster_cofity_$cluster_cofic))
+average<-data.frame(avrage_cluster)
+
+
+
+l<-laplacian_matrix(egchar.sub_all, normalized = FALSE, weights = NULL,
+                 sparse = igraph_opt("sparsematrices"))
+
+
+
+min<-as_adj(ig_all)
+
+eigencentrality_su<- eigen_centrality(egchar.sub_all)
+eigen_centrality_su_<-data.frame(Name=V(egchar.sub_all)$name,eigenC=as.vector(eigencentrality_su[[1]]))
+eigen_centrality_sort_su <-eigen_centrality_su_[order(eigen_centrality_su_$eigenC,decreasing = TRUE),]
+
+
+
+# run kmeans on the 2 eigenvector
+X_sc_kmeans <- kmeans(baev$vectors[,1:30], 5)
+mod_al<-modularity(ig_all_undirect,X_sc_kmeans$cluster)
+
+kmeans_cluster<-data.frame(Name=V(ig_all)$name,clusternum=X_sc_kmeans$cluster)
+kmeans_cluster_sort <-kmeans_cluster[order(kmeans_cluster$clusternum,decreasing = TRUE),]
+nc<-data.frame(kmeans_cluster[which(kmeans_cluster$clusternum=="1" ),"Name"])
+
+
+table(kmeans_cluster_sort$clusternum)
+
+
+nc<-as.character(kmeans_cluster[which(kmeans_cluster$clusternum=="4" ),"Name"])
+
+ig.subkmeans = induced.subgraph(ig_all,nc)
+write_graph(ig.subkmeans, "graph_kmeans.graphml", format ="graphml")
+
+
+
+
+
+library(cluster)
+silhouette_score <- function(k){
+  km <- kmeans(s$v[,1:2], centers = k)
+  ss <- silhouette(km$cluster, dist(s$v[,1:2]))
+  mean(ss[, 3])
+}
+k <- 2:100
+avg_sil <- sapply(k, silhouette_score)
+plot(k, type='b', avg_sil, xlab='Number of clusters', ylab='Average Silhouette Scores', frame=FALSE)
+
+
+
+library(rARPACK)
+if (require(Matrix)) {
+  set.seed(42)
+  
+  M <- as_adj(ig_all, sparse=TRUE)
+  f2 <- function(x, extra=NULL) { cat("."); as.vector(M %*% x) }
+  baev <- arpack(f2, sym=TRUE, options=list(n=vcount(ig_all), nev=50, ncv=51,
+                                            which="LM", maxiter=2000))
+}
+
+di<-cluster_leading_eigen(graph, steps = -1, weights = NULL,
+                      start = NULL, options = arpack_defaults, callback = NULL,
+                      extra = NULL, env = parent.frame())
+
+
+k.max <- 100
+data <- baev$vectors[,1:10]
+wss <- sapply(1:k.max, 
+              function(k){kmeans(data, k, nstart=50,iter.max = 15 )$tot.withinss})
+wss
+plot(1:k.max, wss,
+     type="b", pch = 19, frame = FALSE, 
+     xlab="Number of clusters K",
+     ylab="Total within-clusters sum of squares")
+
+dataf<-data.frame(name=outdegree_df_all [1:10,1])
+#dataf<-data.frame(name=indegree_df_all[1:15,1])
+
+# Create flextable object
+ft <- flextable(data = dataf) %>% 
+  theme_zebra %>% 
+  autofit
+# See flextable in RStudio viewer
+ft
+
+# Create a temp file
+tmp <- tempfile(fileext = ".docx")
+
+# Create a docx file
+read_docx() %>% 
+  body_add_flextable(ft) %>% 
+  print(target = tmp)
+
+# open word document
+browseURL(tmp)
+
+
+#  plot distributions of communities with log log scale
+library(scales)
+
+occu<-data.frame (  table(lovian_all_sort$clus_num))
+
+occu2<-data.frame (  table(occu$Freq))
+
+
+p2 <- ggplot(occu2, aes(x = as.numeric(occu2$Var1), y = as.numeric(occu2$Freq ))) + geom_point() +
+  scale_x_log10(breaks = trans_breaks("log10", function(x) 10^x),
+                labels = trans_format("log10", math_format(10^.x))) +
+  scale_y_log10(breaks = trans_breaks("log10", function(x) 10^x),
+                labels = trans_format("log10", math_format(10^.x))) +
+  theme_bw() 
+p2 <- p2 + labs(x = "Community size", y = "Number of community")
+p2
+
+
+
+publickey<-read.csv("nc2.csv")
+origin<-read.csv("orgin.csv")
+
+clust_19<-data.frame(from=character(),To =character(),Number_path=numeric())
+
+getdistance<-function(df1,df2){
+  
+  
+  for (i in 1:nrow(origin))
+  {
+    for (j in 1:nrow(publickey5))
+    {
+      
+      #d<-shortest_paths(ig_all, V(ig_all)$name=="3P31zvGdh6ai6JK6zZ18TjYzJsa1B83YPoj" , to = V(ig_all)$name=="3PLhgEXUAnWmVqUHqsW4zbp8HxLmFKct2zq",  mode = "out",output =  "both", weights = NA)
+      d1<-shortest_paths(ig_all, V(ig_all)$name==origin$adress[i] , to = V(ig_all)$name==publickey5$adress[j], mode = "out",output =  "both", weights = NA)
+      
+      clust_19<-rbind(clust_19, data.frame(from= origin$adress[i],To=publickey5$adress[j],Number_path= length(d1$epath[[1]])))
+      
+    }
+    
+  }
+ 
+ 
+  return(pathSu)
+}
+
+dist<-getdistance()
+clus_16_with<-data.frame(from=character(),To =character(),Number_path=numeric(),stringsAsFactors=FALSE)
+
+pathclus1<-data.frame(from= as.character(pathSu$from),to=as.character(pathSu$To) ,number_paths= pathSu$Number_path-1,stringsAsFactors=FALSE)
+pathclus2<-data.frame(from= as.character(pathSu3$from),to=as.character(pathSu3$To) ,number_paths= pathSu3$Number_path-1,stringsAsFactors=FALSE)
+pathclus3<-data.frame(from= as.character(pathSu4$from),to=as.character(pathSu4$To) ,number_paths= pathSu4$Number_path-1,stringsAsFactors=FALSE)
+pathclus4<-data.frame(from= as.character(pathSu5$from),to=as.character(pathSu5$To) ,number_paths= pathSu5$Number_path-1,stringsAsFactors=FALSE)
+convertir<-function(df)
+{
+for (i in 1:nrow(df))
+{
+  if(df$from[i]=="3P31zvGdh6ai6JK6zZ18TjYzJsa1B83YPoj")
+  {
+    
+    df$from[i]<-"Bittrex"
+  }else if(df$from[i]=="3PLrCnhKyX5iFbGDxbqqMvea5VAqxMcinPW")
+  {
+    
+    df$from[i]<-"Binance"
+    
+  }else if(df$from[i]=="3PAASSqnygiyYoQuqmXpwaSUJmRkqytwPaw")
+  {
+    
+    df$from[i]<-"Tidex"
+    
+  }else if(df$from[i]=="3P77ApKT9tWCr9WjT2JbzWuzEg2v39ixX1h")
+  {
+    
+    df$from[i]<-"WAVES Buyback"
+    
+  }else if(df$from[i]=="3PE93oWhtuqJXhigh18ATTiUzxZau983vuD")
+  {
+    
+    df$from[i]<-"HitBTC"
+    
+  }else if(df$from[i]=="3P8wPvtfruNZjpqZACNjdqbtGRphwytdo6D")
+  {
+    
+    df$from[i]<-"Hexmo"
+    
+  }else if(df$from[i]=="3PAUszXBU952kUP7saJoJjYP3ujuUWQ8azY")
+  {
+    
+    df$from[i]<-"Hexmo Cold Wallet"
+    
+  }else if(df$from[i]=="3PMY8EZGetAjTZdrtFQ4rBZxD5bJEvUPDyX")
+  {
+    
+    df$from[i]<-"Hexmo"
+    
+  }else if(df$from[i]=="3PPhvAu2vjTY8MuuLeEBnNvyPEhrh3KSq4F")
+  {
+    
+    df$from[i]<-"Huobi"
+    
+  }else if(df$from[i]=="3P81EUTVwpQaSDT8T2YqJmw33BjWeoVeXH4")
+  {
+    
+    df$from[i]<-"OKEx"
+    
+  }else if(df$from[i]=="3PBkqPd2chKH7uHViB3qkjKyYAJCSrsahbt")
+  {
+    
+    df$from[i]<-"LiveCoin"
+    
+  }else if(df$from[i]=="3PNu2t61vQFw9fDT8B9h881H4AtBejnN7mV")
+  {
+    
+    df$from[i]<-"Exrates"
+    
+  }else if(df$from[i]=="3P4eeU7v1LMHQFwwT2GW9W99c6vZyytHajj")
+  {
+    
+    df$from[i]<-"YoBit"
+    
+  }else if(df$from[i]=="3P351tY1WibKh1f4EALHjoHfqWZnqs8gG9g")
+  {
+    
+    df$from[i]<-"Indodax"
+    
+  }else if(df$from[i]=="3PJNxhi7EB6hDL1gkvLdJVbwmVVW3EwsaMS")
+  {
+    
+    df$from[i]<-"Changelly"
+    
+  }else if(df$from[i]=="3PDb2NvVUh7ZqkXYA1JpXHQRyTvrFFD2TCZ")
+  {
+    
+    df$from[i]<-"ShapeShift"
+    
+  }
+ 
+  
+}
+  return(df)
+}
+
+clus_16_nf<- data.frame(from= clust_16$from, to=clust_16$To, path=clust_16$Number_path)
+clus_16_nf <- data.frame(lapply(clus_16_nf, as.character), stringsAsFactors=FALSE)
+
+clus_16_with<-convertir(clus_16_nf)
+
+clus_27_nf<- data.frame(from= clust_27$from, to=clust_27$To, path=clust_27$Number_path)
+clus_27_nf <- data.frame(lapply(clus_27_nf, as.character), stringsAsFactors=FALSE)
+
+clus_27_with<-convertir(clus_27_nf)
+
+clus_33_nf<- data.frame(from= clust_33$from, to=clust_33$To, path=clust_33$Number_path)
+clus_33_nf <- data.frame(lapply(clus_33_nf, as.character), stringsAsFactors=FALSE)
+
+clus_33_with<-convertir(clus_33_nf)
+
+clus_19_nf<- data.frame(from= clust_19$from, to=clust_19$To, path=clust_19$Number_path)
+clus_19_nf <- data.frame(lapply(clus_19_nf, as.character), stringsAsFactors=FALSE)
+
+clus_19_with<-convertir(clus_19_nf)
+
+
+pathsclus3<-convertir(pathclus3)
+pathsclus4<-convertir(pathclus4)
+
+
+
+publickey3<-read.csv("nc3.csv")
+origin1<-read.csv("origin1.csv")
+
+pathorigin1_clus19<-data.frame(from=character(),To =character(),Number_path=numeric())
+
+
+for (i in 1:nrow(origin1))
+{
+  for (j in 1:nrow(publickey5))
+  {
+    
+    d_clus19<-shortest_paths(ig_all, V(ig_all)$name==origin1$adress[i] , to = V(ig_all)$name==publickey5$adress[j], mode = "out",
+                      output =  "both", predecessors = FALSE, inbound.edges = FALSE)
+    
+    
+    pathorigin1_clus19<-rbind(pathorigin1_clus19, data.frame(from= origin1$adress[i],To=publickey5$adress[j],Number_path=length(d_clus19$epath[[1]])))
+    
+  }
+  
+}
+
+write.csv(pathclus1, "short_paths_clus1.csv")
+write.csv(clus_19_with,  "clus_19.csv", row.names = F, na="", sep=",",quote=F, append=F)
